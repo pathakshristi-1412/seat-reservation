@@ -147,6 +147,7 @@ public class ReservationService {
                     idempotencyRecord.getReservation();
 
             reservationMetrics.idempotentReplay();
+            reservationMetrics.reservationDeclined("idempotent_replay");
 
             log.info(
                     "idempotent_replay reservation_id={} show_id={} user_id={}",
