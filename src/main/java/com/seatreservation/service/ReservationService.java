@@ -26,6 +26,7 @@ import com.seatreservation.exception.ReservationAccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.seatreservation.entity.ReservationStatus;
+import com.seatreservation.dto.ReservationResponse;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -58,7 +59,7 @@ public class ReservationService {
     }
 
     @Transactional
-    public Reservation reserveSeats(
+    public ReservationResponse reserveSeats(
             Long showId,
             String userId,
             String idempotencyKey,
@@ -102,7 +103,8 @@ public class ReservationService {
         // 7. Same key + same request already completed
         // Return the ORIGINAL reservation instead of booking again
         if (idempotencyRecord.getReservation() != null) {
-            return idempotencyRecord.getReservation();
+            return toReservationResponse(
+                    idempotencyRecord.getReservation());
         }
 
         // 8. From here onwards this is a NEW reservation operation
@@ -177,7 +179,7 @@ public class ReservationService {
         // 16. Store the successful result against the idempotency key
         idempotencyRecord.setReservation(savedReservation);
 
-        return savedReservation;
+        return toReservationResponse(savedReservation);
     }
 
     @Transactional
@@ -248,5 +250,26 @@ public class ReservationService {
         reservation.setStatus(ReservationStatus.CANCELLED);
 
         return reservation;
+    }
+
+    private ReservationResponse toReservationResponse(Reservation reservation) {
+
+        List<ReservationSeat> reservationSeats = reservationSeatRepository.findByReservationId(
+                reservation.getId());
+
+        List<String> seatCodes = reservationSeats.stream()
+                .map(rs -> rs.getSeat().getSeatCode())
+                .sorted()
+                .toList();
+
+        long amountPaise = reservation.getShow().getPricePaise() * seatCodes.size();
+
+        return new ReservationResponse(
+                reservation.getId(),
+                reservation.getShow().getId(),
+                reservation.getUserId(),
+                seatCodes,
+                amountPaise,
+                reservation.getStatus().name().toLowerCase());
     }
 }

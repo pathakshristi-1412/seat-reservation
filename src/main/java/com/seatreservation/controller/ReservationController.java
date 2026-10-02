@@ -1,5 +1,6 @@
 package com.seatreservation.controller;
 
+import com.seatreservation.dto.ReservationResponse;
 import com.seatreservation.dto.ReserveSeatsRequest;
 import com.seatreservation.entity.Reservation;
 import com.seatreservation.service.ReservationService;
@@ -19,7 +20,7 @@ public class ReservationController {
     }
 
     @PostMapping("/{showId}/reserve")
-    public ResponseEntity<Reservation> reserveSeats(
+    public ResponseEntity<ReservationResponse> reserveSeats(
             @PathVariable Long showId,
             @Valid @RequestBody ReserveSeatsRequest request,
             @RequestHeader("Authorization") String authorization,
@@ -27,7 +28,7 @@ public class ReservationController {
 
         String userId = authorization.replace("Bearer ", "");
 
-        Reservation reservation = reservationService.reserveSeats(
+        ReservationResponse reservation = reservationService.reserveSeats(
                 showId,
                 userId,
                 idempotencyKey,

@@ -88,7 +88,7 @@ public class ShowService {
             seatStates.add(
                     new SeatStateResponse(
                             seat.getSeatCode(),
-                            seat.getStatus().name()));
+                            seat.getStatus().name().toLowerCase()));
         }
 
         // We chose immediate confirmation, not temporary holds

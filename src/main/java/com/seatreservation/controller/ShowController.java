@@ -8,7 +8,6 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import com.seatreservation.dto.ShowStateResponse;
 
 @RestController
 @RequestMapping("/shows")
@@ -21,21 +20,25 @@ public class ShowController {
     }
 
     @PostMapping
-    public ResponseEntity<Show> createShow(
+    public ResponseEntity<ShowStateResponse> createShow(
             @Valid @RequestBody CreateShowRequest request) {
 
         Show show = showService.createShow(request);
 
+        ShowStateResponse response =
+                showService.getShowState(show.getId());
+
         return ResponseEntity
                 .status(HttpStatus.CREATED)
-                .body(show);
+                .body(response);
     }
 
     @GetMapping("/{showId}")
     public ResponseEntity<ShowStateResponse> getShow(
             @PathVariable Long showId) {
 
-        ShowStateResponse response = showService.getShowState(showId);
+        ShowStateResponse response =
+                showService.getShowState(showId);
 
         return ResponseEntity.ok(response);
     }
