@@ -1,3 +1,4 @@
+
 package com.seatreservation.service;
 
 import com.seatreservation.dto.ReservationResponse;
@@ -29,6 +30,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -40,6 +43,8 @@ public class ReservationService {
 
     private static final Logger log =
             LoggerFactory.getLogger(ReservationService.class);
+
+    private static final int MAX_SEATS_PER_USER = 4;
 
     private final ShowRepository showRepository;
     private final SeatRepository seatRepository;
@@ -80,12 +85,12 @@ public class ReservationService {
                 userId,
                 request.getSeats());
 
-        // 1. Check whether show exists
+        // 1. Check whether the show exists.
         Show show = showRepository.findById(showId)
                 .orElseThrow(() ->
                         new ShowNotFoundException("Show not found"));
 
-        // 2. Reject duplicate seats like ["A1", "A1"]
+        // 2. Reject duplicate seat codes.
         Set<String> uniqueSeatCodes =
                 new HashSet<>(request.getSeats());
 
@@ -101,19 +106,19 @@ public class ReservationService {
                     "Duplicate seat codes are not allowed");
         }
 
-        // 3. Create deterministic fingerprint for idempotency
+        // 3. Generate a deterministic request fingerprint.
         String requestHash =
                 RequestHashUtil.hashReservationRequest(
                         showId,
                         request.getSeats());
 
-        // 4. Create idempotency record if this is a new key
+        // 4. Create an idempotency record for a new key.
         idempotencyRecordRepository.createIfNotExists(
                 userId,
                 idempotencyKey,
                 requestHash);
 
-        // 5. Lock idempotency record
+        // 5. Lock the idempotency record.
         IdempotencyRecord idempotencyRecord =
                 idempotencyRecordRepository
                         .findForUpdate(userId, idempotencyKey)
@@ -121,7 +126,7 @@ public class ReservationService {
                                 new IllegalStateException(
                                         "Idempotency record not found"));
 
-        // 6. Same key + different request = conflict
+        // 6. Same key with a different request is a conflict.
         if (!idempotencyRecord
                 .getRequestHash()
                 .equals(requestHash)) {
@@ -135,7 +140,7 @@ public class ReservationService {
                     "Idempotency key was already used with a different request");
         }
 
-        // 7. Same key + same request already completed
+        // 7. Return the original reservation on a retry.
         if (idempotencyRecord.getReservation() != null) {
 
             Reservation existingReservation =
@@ -152,12 +157,11 @@ public class ReservationService {
             return toReservationResponse(existingReservation);
         }
 
-        // 8. Ensure user/show counter exists
+        // 8. Create and lock the user's booking counter.
         userShowBookingRepository.createIfNotExists(
                 userId,
                 showId);
 
-        // Lock user's counter for this show
         UserShowBooking userBooking =
                 userShowBookingRepository
                         .findForUpdate(userId, showId)
@@ -167,9 +171,9 @@ public class ReservationService {
 
         int requestedSeats = request.getSeats().size();
 
-        // 9. Maximum 4 confirmed seats per user/show
+        // 9. Enforce the per-user limit.
         if (userBooking.getConfirmedSeats()
-                + requestedSeats > 4) {
+                + requestedSeats > MAX_SEATS_PER_USER) {
 
             log.warn(
                     "reservation_declined reason=per_user_limit show_id={} user_id={} current_seats={} requested_seats={}",
@@ -179,17 +183,18 @@ public class ReservationService {
                     requestedSeats);
 
             throw new BookingLimitExceededException(
-                    "User cannot reserve more than 4 seats");
+                    "User cannot reserve more than "
+                            + MAX_SEATS_PER_USER
+                            + " seats");
         }
 
-        // 10. Lock requested seats.
-        // Repository orders them by seatCode to reduce deadlock risk.
+        // 10. Lock requested seats in deterministic seat-code order.
         List<Seat> seats =
                 seatRepository.findSeatsForUpdate(
                         showId,
                         request.getSeats());
 
-        // 11. Ensure every requested seat exists
+        // 11. Ensure all requested seats exist.
         if (seats.size() != request.getSeats().size()) {
 
             log.warn(
@@ -202,7 +207,8 @@ public class ReservationService {
                     "One or more requested seats do not exist");
         }
 
-        // 12. All-or-nothing availability check
+        // 12. Check availability before changing any seat.
+        // Multi-seat reservations are all-or-nothing.
         for (Seat seat : seats) {
 
             if (seat.getStatus() != SeatStatus.AVAILABLE) {
@@ -218,14 +224,14 @@ public class ReservationService {
             }
         }
 
-        // 13. Create reservation
+        // 13. Create the reservation.
         Reservation reservation =
                 new Reservation(show, userId);
 
         Reservation savedReservation =
                 reservationRepository.save(reservation);
 
-        // 14. Connect reservation with requested seats
+        // 14. Confirm seats and associate them with the reservation.
         List<ReservationSeat> reservationSeats =
                 new ArrayList<>();
 
@@ -233,7 +239,6 @@ public class ReservationService {
 
             seat.setStatus(SeatStatus.CONFIRMED);
 
-            // Track which reservation currently owns the seat
             seat.setCurrentReservation(savedReservation);
 
             reservationSeats.add(
@@ -244,16 +249,25 @@ public class ReservationService {
 
         reservationSeatRepository.saveAll(reservationSeats);
 
-        // 15. Update user's confirmed-seat count
+        // 15. Update the user's confirmed-seat count.
         userBooking.setConfirmedSeats(
                 userBooking.getConfirmedSeats()
                         + seats.size());
 
-        // 16. Store successful reservation against idempotency key
+        // 16. Save the successful result against the idempotency key.
         idempotencyRecord.setReservation(savedReservation);
 
-        // Prometheus metric
-        reservationMetrics.reservationConfirmed();
+        // 17. Increment the success metric only AFTER DB commit.
+        // A rolled-back transaction must not count as confirmed.
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+
+                    @Override
+                    public void afterCommit() {
+                        reservationMetrics.reservationConfirmed();
+                    }
+                }
+        );
 
         log.info(
                 "reservation_confirmed reservation_id={} show_id={} user_id={} seats={} amount_paise={}",
@@ -276,7 +290,7 @@ public class ReservationService {
                 reservationId,
                 userId);
 
-        // 1. Lock reservation
+        // 1. Lock the reservation.
         Reservation reservation =
                 reservationRepository
                         .findForUpdate(reservationId)
@@ -284,7 +298,7 @@ public class ReservationService {
                                 new InvalidReservationRequestException(
                                         "Reservation not found"));
 
-        // 2. Only owner can cancel
+        // 2. Only the reservation owner can cancel.
         if (!reservation.getUserId().equals(userId)) {
 
             log.warn(
@@ -296,7 +310,7 @@ public class ReservationService {
                     "Reservation does not belong to this user");
         }
 
-        // 3. Cancellation is idempotent
+        // 3. Repeated cancellation is idempotent.
         if (reservation.getStatus()
                 == ReservationStatus.CANCELLED) {
 
@@ -308,7 +322,7 @@ public class ReservationService {
             return toReservationResponse(reservation);
         }
 
-        // 4. Find seats belonging to reservation
+        // 4. Find seats associated with this reservation.
         List<ReservationSeat> reservationSeats =
                 reservationSeatRepository
                         .findByReservationId(reservationId);
@@ -321,16 +335,15 @@ public class ReservationService {
                         .toList();
 
         /*
-         * Keep lock order consistent:
+         * Maintain the same lock order in both operations:
          *
-         * Reserve:
-         * user/show -> seats
+         * Reserve: user/show counter -> seats
+         * Cancel:  user/show counter -> seats
          *
-         * Cancel:
-         * user/show -> seats
+         * Consistent ordering reduces deadlock risk.
          */
 
-        // 5. Lock user/show counter FIRST
+        // 5. Lock the user/show counter first.
         UserShowBooking userBooking =
                 userShowBookingRepository
                         .findForUpdate(
@@ -340,13 +353,13 @@ public class ReservationService {
                                 new IllegalStateException(
                                         "User booking record not found"));
 
-        // 6. Lock seats AFTER user/show counter
+        // 6. Lock seats after the user/show counter.
         List<Seat> lockedSeats =
                 seatRepository.findSeatsForUpdate(
                         reservation.getShow().getId(),
                         seatCodes);
 
-        // 7. Release only seats still owned by this reservation
+        // 7. Release only seats still owned by this reservation.
         int releasedSeats = 0;
 
         for (Seat seat : lockedSeats) {
@@ -363,12 +376,12 @@ public class ReservationService {
             }
         }
 
-        // 8. Update user's confirmed-seat counter
+        // 8. Decrease the user's confirmed-seat count.
         userBooking.setConfirmedSeats(
                 userBooking.getConfirmedSeats()
                         - releasedSeats);
 
-        // 9. Mark reservation cancelled
+        // 9. Mark the reservation as cancelled.
         reservation.setStatus(
                 ReservationStatus.CANCELLED);
 
