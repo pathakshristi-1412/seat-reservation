@@ -3,15 +3,9 @@ package com.seatreservation.entity;
 import jakarta.persistence.*;
 
 @Entity
-@Table(
-    name = "seats",
-    uniqueConstraints = {
-        @UniqueConstraint(
-            name = "uk_show_seat_number",
-            columnNames = {"show_id", "seat_number"}
-        )
-    }
-)
+@Table(name = "seats", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_show_seat_number", columnNames = { "show_id", "seat_number" })
+})
 public class Seat {
 
     @Id
@@ -28,6 +22,10 @@ public class Seat {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "show_id", nullable = false)
     private Show show;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "current_reservation_id")
+    private Reservation currentReservation;
 
     public Seat() {
     }
@@ -56,5 +54,13 @@ public class Seat {
 
     public void setStatus(SeatStatus status) {
         this.status = status;
+    }
+
+    public Reservation getCurrentReservation() {
+        return currentReservation;
+    }
+
+    public void setCurrentReservation(Reservation currentReservation) {
+        this.currentReservation = currentReservation;
     }
 }

@@ -64,4 +64,15 @@ public class GlobalExceptionHandler {
                         "error", "IDEMPOTENCY_CONFLICT",
                         "message", ex.getMessage()));
     }
+
+    @ExceptionHandler(ReservationAccessDeniedException.class)
+    public ResponseEntity<Map<String, String>> handleReservationAccessDenied(
+            ReservationAccessDeniedException ex) {
+
+        return ResponseEntity
+                .status(HttpStatus.FORBIDDEN)
+                .body(Map.of(
+                        "error", "RESERVATION_ACCESS_DENIED",
+                        "message", ex.getMessage()));
+    }
 }
