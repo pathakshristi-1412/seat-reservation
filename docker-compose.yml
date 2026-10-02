@@ -1,0 +1,63 @@
+services:
+
+  postgres:
+    image: postgres:17
+    container_name: seat-reservation-db-compose
+
+    environment:
+      POSTGRES_DB: seatreservation
+      POSTGRES_USER: seatuser
+      POSTGRES_PASSWORD: seatpass
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - seat-reservation-postgres-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U seatuser -d seatreservation"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: seat-reservation-app
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/seatreservation
+      DB_USERNAME: seatuser
+      DB_PASSWORD: seatpass
+
+      AUTH_SECRET: local-docker-development-secret
+
+      SPRING_PROFILES_ACTIVE: dev
+
+    ports:
+      - "8080:8080"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8080/actuator/health || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  seat-reservation-postgres-data:
