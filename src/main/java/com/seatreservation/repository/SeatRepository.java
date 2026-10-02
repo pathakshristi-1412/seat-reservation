@@ -11,6 +11,8 @@ import java.util.List;
 
 public interface SeatRepository extends JpaRepository<Seat, Long> {
 
+    // Used during reservation/cancellation.
+    // Requested seat rows are locked before changing them.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             SELECT s
@@ -22,5 +24,17 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
     List<Seat> findSeatsForUpdate(
             @Param("showId") Long showId,
             @Param("seatNumbers") List<Integer> seatNumbers
+    );
+
+    // Used by GET /shows/{id}.
+    // No write lock is needed because this only reads state.
+    @Query("""
+            SELECT s
+            FROM Seat s
+            WHERE s.show.id = :showId
+            ORDER BY s.seatNumber
+            """)
+    List<Seat> findByShowId(
+            @Param("showId") Long showId
     );
 }
