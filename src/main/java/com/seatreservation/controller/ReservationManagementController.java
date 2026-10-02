@@ -1,6 +1,6 @@
 package com.seatreservation.controller;
 
-import com.seatreservation.entity.Reservation;
+import com.seatreservation.dto.ReservationResponse;
 import com.seatreservation.service.ReservationService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,17 +17,17 @@ public class ReservationManagementController {
     }
 
     @PostMapping("/{reservationId}/cancel")
-    public ResponseEntity<Reservation> cancelReservation(
+    public ResponseEntity<ReservationResponse> cancelReservation(
             @PathVariable Long reservationId,
             @RequestHeader("Authorization") String authorization) {
 
         String userId = authorization.replace("Bearer ", "");
 
-        Reservation reservation =
+        ReservationResponse response =
                 reservationService.cancelReservation(
                         reservationId,
                         userId);
 
-        return ResponseEntity.ok(reservation);
+        return ResponseEntity.ok(response);
     }
 }
