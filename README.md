@@ -4,6 +4,56 @@ A concurrency-safe seat reservation service built with Java, Spring Boot, Postgr
 
 The service is designed for high-contention event sales where many users may attempt to reserve the same seat concurrently. PostgreSQL is used as the source of truth and row-level locking is used to prevent double-selling.
 
+## Live Deployment
+
+The service is publicly deployed on Railway.
+
+**Base URL**
+
+```text
+https://seat-reservation-production-7d7b.up.railway.app
+```
+
+**Health**
+
+```text
+GET https://seat-reservation-production-7d7b.up.railway.app/actuator/health
+```
+
+**Readiness**
+
+```text
+GET https://seat-reservation-production-7d7b.up.railway.app/actuator/health/readiness
+```
+
+The production deployment uses PostgreSQL on Railway and runs with the `prod` Spring profile.
+
+### Production Authentication
+
+Reservation and cancellation endpoints require an HMAC-signed bearer token. The signing secret is not stored in this repository.
+
+The following pre-generated demo tokens can be used to test the deployed service:
+
+```text
+demo-user-a: ZGVtby11c2VyLWE.KVg7aMLw3FwXv9Capvf2VhTiMPERJzeoaU-3RhRUUT8
+demo-user-b: ZGVtby11c2VyLWI.HG5WnRwdRLIcAUU1ojKQIMV2E6Lq6yqqTjLkROS2JCQ
+demo-user-c: ZGVtby11c2VyLWM.y3aNp-UYm3mAJ2u1pEKNVapbiPGfNrjoZ_xKrvlnX6c
+demo-user-d: ZGVtby11c2VyLWQ.DjZcC6rijV8fhB5NGZ7B-PESdXSud7-4KkZHl2ojbAg
+```
+
+Example reservation using `demo-user-a`:
+
+```bash
+curl -X POST "https://seat-reservation-production-7d7b.up.railway.app/shows/1/reserve" \
+  -H "Authorization: Bearer ZGVtby11c2VyLWE.KVg7aMLw3FwXv9Capvf2VhTiMPERJzeoaU-3RhRUUT8" \
+  -H "Idempotency-Key: evaluator-test-001" \
+  -H "Content-Type: application/json" \
+  -d '{"seats":["A2"]}'
+```
+
+User identity is derived from the signed token and is not accepted from the reservation request body.
+
+---
 ## Tech Stack
 
 - Java 17
