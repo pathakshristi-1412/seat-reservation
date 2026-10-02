@@ -1,6 +1,7 @@
 package com.seatreservation.repository;
 
 import com.seatreservation.entity.Seat;
+import com.seatreservation.entity.SeatStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -33,4 +34,7 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
     List<Seat> findByShowId(
             @Param("showId") Long showId
     );
+
+    // Used by Prometheus "seats available" gauge
+    long countByStatus(SeatStatus status);
 }

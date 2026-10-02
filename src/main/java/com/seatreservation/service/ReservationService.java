@@ -16,6 +16,7 @@ import com.seatreservation.exception.InvalidReservationRequestException;
 import com.seatreservation.exception.ReservationAccessDeniedException;
 import com.seatreservation.exception.SeatUnavailableException;
 import com.seatreservation.exception.ShowNotFoundException;
+import com.seatreservation.metrics.ReservationMetrics;
 import com.seatreservation.repository.IdempotencyRecordRepository;
 import com.seatreservation.repository.ReservationRepository;
 import com.seatreservation.repository.ReservationSeatRepository;
@@ -41,13 +42,17 @@ public class ReservationService {
     private final UserShowBookingRepository userShowBookingRepository;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
 
+    // Prometheus metrics
+    private final ReservationMetrics reservationMetrics;
+
     public ReservationService(
             ShowRepository showRepository,
             SeatRepository seatRepository,
             ReservationRepository reservationRepository,
             ReservationSeatRepository reservationSeatRepository,
             UserShowBookingRepository userShowBookingRepository,
-            IdempotencyRecordRepository idempotencyRecordRepository) {
+            IdempotencyRecordRepository idempotencyRecordRepository,
+            ReservationMetrics reservationMetrics) {
 
         this.showRepository = showRepository;
         this.seatRepository = seatRepository;
@@ -55,6 +60,7 @@ public class ReservationService {
         this.reservationSeatRepository = reservationSeatRepository;
         this.userShowBookingRepository = userShowBookingRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
+        this.reservationMetrics = reservationMetrics;
     }
 
     @Transactional
@@ -64,7 +70,7 @@ public class ReservationService {
             String idempotencyKey,
             ReserveSeatsRequest request) {
 
-        // 1. Check whether the show exists
+        // 1. Check whether show exists
         Show show = showRepository.findById(showId)
                 .orElseThrow(() ->
                         new ShowNotFoundException("Show not found"));
@@ -78,13 +84,13 @@ public class ReservationService {
                     "Duplicate seat codes are not allowed");
         }
 
-        // 3. Create deterministic fingerprint of this request
+        // 3. Create deterministic fingerprint for idempotency
         String requestHash =
                 RequestHashUtil.hashReservationRequest(
                         showId,
                         request.getSeats());
 
-        // 4. Atomically create idempotency record if this is a new key
+        // 4. Create idempotency record if this is a new key
         idempotencyRecordRepository.createIfNotExists(
                 userId,
                 idempotencyKey,
@@ -98,7 +104,7 @@ public class ReservationService {
                                 new IllegalStateException(
                                         "Idempotency record not found"));
 
-        // 6. Same key but different request
+        // 6. Same key + different request = conflict
         if (!idempotencyRecord
                 .getRequestHash()
                 .equals(requestHash)) {
@@ -108,8 +114,11 @@ public class ReservationService {
         }
 
         // 7. Same key + same request already completed
-        // Return original reservation
         if (idempotencyRecord.getReservation() != null) {
+
+            // Count this as an idempotent replay
+            reservationMetrics.idempotentReplay();
+
             return toReservationResponse(
                     idempotencyRecord.getReservation());
         }
@@ -129,7 +138,7 @@ public class ReservationService {
 
         int requestedSeats = request.getSeats().size();
 
-        // 9. Enforce maximum 4 confirmed seats per user/show
+        // 9. Maximum 4 confirmed seats per user/show
         if (userBooking.getConfirmedSeats()
                 + requestedSeats > 4) {
 
@@ -137,14 +146,14 @@ public class ReservationService {
                     "User cannot reserve more than 4 seats");
         }
 
-        // 10. Lock requested seat rows.
-        // Repository orders them deterministically by seat code.
+        // 10. Lock requested seats
+        // Repository orders them by seatCode to reduce deadlock risk
         List<Seat> seats =
                 seatRepository.findSeatsForUpdate(
                         showId,
                         request.getSeats());
 
-        // 11. Make sure all requested seats exist
+        // 11. Ensure every requested seat exists
         if (seats.size() != request.getSeats().size()) {
             throw new InvalidReservationRequestException(
                     "One or more requested seats do not exist");
@@ -166,7 +175,7 @@ public class ReservationService {
         Reservation savedReservation =
                 reservationRepository.save(reservation);
 
-        // 14. Connect reservation to requested seats
+        // 14. Connect reservation with requested seats
         List<ReservationSeat> reservationSeats =
                 new ArrayList<>();
 
@@ -174,7 +183,7 @@ public class ReservationService {
 
             seat.setStatus(SeatStatus.CONFIRMED);
 
-            // Record which reservation currently owns this seat
+            // Track which reservation currently owns the seat
             seat.setCurrentReservation(savedReservation);
 
             reservationSeats.add(
@@ -185,13 +194,16 @@ public class ReservationService {
 
         reservationSeatRepository.saveAll(reservationSeats);
 
-        // 15. Update user's confirmed-seat counter
+        // 15. Update user's confirmed-seat count
         userBooking.setConfirmedSeats(
                 userBooking.getConfirmedSeats()
                         + seats.size());
 
-        // 16. Store successful result against idempotency key
+        // 16. Store successful reservation against idempotency key
         idempotencyRecord.setReservation(savedReservation);
+
+        // Count NEW successful reservation
+        reservationMetrics.reservationConfirmed();
 
         return toReservationResponse(savedReservation);
     }
@@ -201,8 +213,7 @@ public class ReservationService {
             Long reservationId,
             String userId) {
 
-        // 1. Lock reservation so two cancellation requests
-        // cannot process it simultaneously
+        // 1. Lock reservation
         Reservation reservation =
                 reservationRepository
                         .findForUpdate(reservationId)
@@ -223,7 +234,7 @@ public class ReservationService {
             return toReservationResponse(reservation);
         }
 
-        // 4. Find seats belonging to this reservation
+        // 4. Find seats belonging to reservation
         List<ReservationSeat> reservationSeats =
                 reservationSeatRepository
                         .findByReservationId(reservationId);
@@ -236,18 +247,16 @@ public class ReservationService {
                         .toList();
 
         /*
-         * IMPORTANT LOCK ORDER:
+         * Keep lock order consistent:
          *
          * Reserve:
-         * user/show counter -> seats
+         * user/show -> seats
          *
          * Cancel:
-         * user/show counter -> seats
-         *
-         * Keeping the same order reduces deadlock risk.
+         * user/show -> seats
          */
 
-        // 5. Lock user's per-show booking counter FIRST
+        // 5. Lock user/show counter FIRST
         UserShowBooking userBooking =
                 userShowBookingRepository
                         .findForUpdate(
@@ -257,13 +266,13 @@ public class ReservationService {
                                 new IllegalStateException(
                                         "User booking record not found"));
 
-        // 6. Then lock seat rows in deterministic order
+        // 6. Lock seats AFTER user/show counter
         List<Seat> lockedSeats =
                 seatRepository.findSeatsForUpdate(
                         reservation.getShow().getId(),
                         seatCodes);
 
-        // 7. Release only seats STILL owned by this reservation
+        // 7. Release only seats still owned by this reservation
         int releasedSeats = 0;
 
         for (Seat seat : lockedSeats) {
@@ -275,11 +284,12 @@ public class ReservationService {
 
                 seat.setStatus(SeatStatus.AVAILABLE);
                 seat.setCurrentReservation(null);
+
                 releasedSeats++;
             }
         }
 
-        // 8. Decrease confirmed-seat counter
+        // 8. Update user's confirmed-seat counter
         userBooking.setConfirmedSeats(
                 userBooking.getConfirmedSeats()
                         - releasedSeats);
