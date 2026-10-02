@@ -69,9 +69,9 @@ public class ReservationService {
                 .orElseThrow(() -> new ShowNotFoundException("Show not found"));
 
         // 2. Reject duplicate seat numbers like [3, 3]
-        Set<Integer> uniqueSeatNumbers = new HashSet<>(request.getSeats());
+        Set<String> uniqueSeatCodes = new HashSet<>(request.getSeats());
 
-        if (uniqueSeatNumbers.size() != request.getSeats().size()) {
+        if (uniqueSeatCodes.size() != request.getSeats().size()) {
             throw new InvalidReservationRequestException(
                     "Duplicate seat numbers are not allowed");
         }
@@ -206,15 +206,15 @@ public class ReservationService {
         List<ReservationSeat> reservationSeats = reservationSeatRepository
                 .findByReservationId(reservationId);
 
-        List<Integer> seatNumbers = reservationSeats.stream()
-                .map(rs -> rs.getSeat().getSeatNumber())
+        List<String> seatCodes = reservationSeats.stream()
+                .map(rs -> rs.getSeat().getSeatCode())
                 .sorted()
                 .toList();
 
         // 5. Lock the actual seat rows
         List<Seat> lockedSeats = seatRepository.findSeatsForUpdate(
                 reservation.getShow().getId(),
-                seatNumbers);
+                seatCodes);
 
         // 6. Release only seats STILL owned by this reservation
         int releasedSeats = 0;

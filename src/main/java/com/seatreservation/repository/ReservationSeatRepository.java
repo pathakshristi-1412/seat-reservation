@@ -15,7 +15,7 @@ public interface ReservationSeatRepository
             FROM ReservationSeat rs
             JOIN FETCH rs.seat
             WHERE rs.reservation.id = :reservationId
-            ORDER BY rs.seat.seatNumber
+            ORDER BY rs.seat.seatCode
             """)
     List<ReservationSeat> findByReservationId(
             @Param("reservationId") Long reservationId

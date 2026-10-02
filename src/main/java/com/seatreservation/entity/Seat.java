@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 
 @Entity
 @Table(name = "seats", uniqueConstraints = {
-        @UniqueConstraint(name = "uk_show_seat_number", columnNames = { "show_id", "seat_number" })
+        @UniqueConstraint(name = "uk_show_seat_number", columnNames =  {"show_id", "seat_code"})
 })
 public class Seat {
 
@@ -12,8 +12,8 @@ public class Seat {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "seat_number", nullable = false)
-    private Integer seatNumber;
+    @Column(name = "seat_code", nullable = false)
+    private String seatCode;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -30,8 +30,8 @@ public class Seat {
     public Seat() {
     }
 
-    public Seat(Integer seatNumber, Show show) {
-        this.seatNumber = seatNumber;
+    public Seat(String seatCode, Show show) {
+        this.seatCode = seatCode;
         this.show = show;
         this.status = SeatStatus.AVAILABLE;
     }
@@ -40,8 +40,8 @@ public class Seat {
         return id;
     }
 
-    public Integer getSeatNumber() {
-        return seatNumber;
+    public String getSeatCode() {
+        return seatCode;
     }
 
     public SeatStatus getStatus() {

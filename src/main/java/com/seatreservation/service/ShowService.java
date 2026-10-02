@@ -10,9 +10,14 @@ import org.springframework.transaction.annotation.Transactional;
 import com.seatreservation.dto.SeatStateResponse;
 import com.seatreservation.dto.ShowStateResponse;
 import com.seatreservation.entity.SeatStatus;
+import com.seatreservation.exception.InvalidReservationRequestException;
 import com.seatreservation.exception.ShowNotFoundException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import com.seatreservation.exception.InvalidReservationRequestException;
+import java.util.HashSet;
+import java.util.Set;
 
 @Service
 public class ShowService {
@@ -30,17 +35,25 @@ public class ShowService {
     @Transactional
     public Show createShow(CreateShowRequest request) {
 
+        // Reject duplicate seat codes such as ["A1", "A1"]
+        Set<String> uniqueSeats = new HashSet<>(request.getSeats());
+
+        if (uniqueSeats.size() != request.getSeats().size()) {
+            throw new InvalidReservationRequestException(
+                    "Duplicate seat codes are not allowed");
+        }
+
         Show show = new Show(
                 request.getName(),
-                request.getSeats(),
+                request.getSeats().size(),
                 request.getPricePaise());
 
         Show savedShow = showRepository.save(show);
 
         List<Seat> seats = new ArrayList<>();
 
-        for (int i = 1; i <= request.getSeats(); i++) {
-            seats.add(new Seat(i, savedShow));
+        for (String seatCode : request.getSeats()) {
+            seats.add(new Seat(seatCode, savedShow));
         }
 
         seatRepository.saveAll(seats);
@@ -74,7 +87,7 @@ public class ShowService {
 
             seatStates.add(
                     new SeatStateResponse(
-                            seat.getSeatNumber(),
+                            seat.getSeatCode(),
                             seat.getStatus().name()));
         }
 

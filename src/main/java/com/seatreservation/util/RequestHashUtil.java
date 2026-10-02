@@ -12,9 +12,9 @@ public final class RequestHashUtil {
 
     public static String hashReservationRequest(
             Long showId,
-            List<Integer> seatNumbers) {
+            List<String> seatCodes) {
 
-        List<Integer> sortedSeats = seatNumbers.stream()
+        List<String> sortedSeats = seatCodes.stream()
                 .sorted()
                 .toList();
 
