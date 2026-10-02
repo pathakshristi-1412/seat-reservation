@@ -24,6 +24,9 @@ import com.seatreservation.repository.SeatRepository;
 import com.seatreservation.repository.ShowRepository;
 import com.seatreservation.repository.UserShowBookingRepository;
 import com.seatreservation.util.RequestHashUtil;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,14 +38,15 @@ import java.util.Set;
 @Service
 public class ReservationService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(ReservationService.class);
+
     private final ShowRepository showRepository;
     private final SeatRepository seatRepository;
     private final ReservationRepository reservationRepository;
     private final ReservationSeatRepository reservationSeatRepository;
     private final UserShowBookingRepository userShowBookingRepository;
     private final IdempotencyRecordRepository idempotencyRecordRepository;
-
-    // Prometheus metrics
     private final ReservationMetrics reservationMetrics;
 
     public ReservationService(
@@ -70,6 +74,12 @@ public class ReservationService {
             String idempotencyKey,
             ReserveSeatsRequest request) {
 
+        log.info(
+                "reservation_request show_id={} user_id={} seats={}",
+                showId,
+                userId,
+                request.getSeats());
+
         // 1. Check whether show exists
         Show show = showRepository.findById(showId)
                 .orElseThrow(() ->
@@ -80,6 +90,13 @@ public class ReservationService {
                 new HashSet<>(request.getSeats());
 
         if (uniqueSeatCodes.size() != request.getSeats().size()) {
+
+            log.warn(
+                    "reservation_declined reason=duplicate_seats show_id={} user_id={} seats={}",
+                    showId,
+                    userId,
+                    request.getSeats());
+
             throw new InvalidReservationRequestException(
                     "Duplicate seat codes are not allowed");
         }
@@ -109,6 +126,11 @@ public class ReservationService {
                 .getRequestHash()
                 .equals(requestHash)) {
 
+            log.warn(
+                    "reservation_declined reason=idempotency_conflict show_id={} user_id={}",
+                    showId,
+                    userId);
+
             throw new IdempotencyConflictException(
                     "Idempotency key was already used with a different request");
         }
@@ -116,11 +138,18 @@ public class ReservationService {
         // 7. Same key + same request already completed
         if (idempotencyRecord.getReservation() != null) {
 
-            // Count this as an idempotent replay
+            Reservation existingReservation =
+                    idempotencyRecord.getReservation();
+
             reservationMetrics.idempotentReplay();
 
-            return toReservationResponse(
-                    idempotencyRecord.getReservation());
+            log.info(
+                    "idempotent_replay reservation_id={} show_id={} user_id={}",
+                    existingReservation.getId(),
+                    showId,
+                    userId);
+
+            return toReservationResponse(existingReservation);
         }
 
         // 8. Ensure user/show counter exists
@@ -142,12 +171,19 @@ public class ReservationService {
         if (userBooking.getConfirmedSeats()
                 + requestedSeats > 4) {
 
+            log.warn(
+                    "reservation_declined reason=per_user_limit show_id={} user_id={} current_seats={} requested_seats={}",
+                    showId,
+                    userId,
+                    userBooking.getConfirmedSeats(),
+                    requestedSeats);
+
             throw new BookingLimitExceededException(
                     "User cannot reserve more than 4 seats");
         }
 
-        // 10. Lock requested seats
-        // Repository orders them by seatCode to reduce deadlock risk
+        // 10. Lock requested seats.
+        // Repository orders them by seatCode to reduce deadlock risk.
         List<Seat> seats =
                 seatRepository.findSeatsForUpdate(
                         showId,
@@ -155,6 +191,13 @@ public class ReservationService {
 
         // 11. Ensure every requested seat exists
         if (seats.size() != request.getSeats().size()) {
+
+            log.warn(
+                    "reservation_declined reason=invalid_seat show_id={} user_id={} requested_seats={}",
+                    showId,
+                    userId,
+                    request.getSeats());
+
             throw new InvalidReservationRequestException(
                     "One or more requested seats do not exist");
         }
@@ -163,6 +206,13 @@ public class ReservationService {
         for (Seat seat : seats) {
 
             if (seat.getStatus() != SeatStatus.AVAILABLE) {
+
+                log.warn(
+                        "reservation_declined reason=seat_taken show_id={} user_id={} seat={}",
+                        showId,
+                        userId,
+                        seat.getSeatCode());
+
                 throw new SeatUnavailableException(
                         "One or more requested seats are already reserved");
             }
@@ -202,8 +252,16 @@ public class ReservationService {
         // 16. Store successful reservation against idempotency key
         idempotencyRecord.setReservation(savedReservation);
 
-        // Count NEW successful reservation
+        // Prometheus metric
         reservationMetrics.reservationConfirmed();
+
+        log.info(
+                "reservation_confirmed reservation_id={} show_id={} user_id={} seats={} amount_paise={}",
+                savedReservation.getId(),
+                showId,
+                userId,
+                request.getSeats(),
+                show.getPricePaise() * seats.size());
 
         return toReservationResponse(savedReservation);
     }
@@ -212,6 +270,11 @@ public class ReservationService {
     public ReservationResponse cancelReservation(
             Long reservationId,
             String userId) {
+
+        log.info(
+                "cancellation_request reservation_id={} user_id={}",
+                reservationId,
+                userId);
 
         // 1. Lock reservation
         Reservation reservation =
@@ -223,6 +286,12 @@ public class ReservationService {
 
         // 2. Only owner can cancel
         if (!reservation.getUserId().equals(userId)) {
+
+            log.warn(
+                    "cancellation_declined reason=not_owner reservation_id={} user_id={}",
+                    reservationId,
+                    userId);
+
             throw new ReservationAccessDeniedException(
                     "Reservation does not belong to this user");
         }
@@ -230,6 +299,11 @@ public class ReservationService {
         // 3. Cancellation is idempotent
         if (reservation.getStatus()
                 == ReservationStatus.CANCELLED) {
+
+            log.info(
+                    "cancellation_replay reservation_id={} user_id={}",
+                    reservationId,
+                    userId);
 
             return toReservationResponse(reservation);
         }
@@ -297,6 +371,14 @@ public class ReservationService {
         // 9. Mark reservation cancelled
         reservation.setStatus(
                 ReservationStatus.CANCELLED);
+
+        log.info(
+                "reservation_cancelled reservation_id={} show_id={} user_id={} seats={} released_seats={}",
+                reservationId,
+                reservation.getShow().getId(),
+                userId,
+                seatCodes,
+                releasedSeats);
 
         return toReservationResponse(reservation);
     }
