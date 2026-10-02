@@ -22,16 +22,16 @@ public class ReservationController {
     public ResponseEntity<Reservation> reserveSeats(
             @PathVariable Long showId,
             @Valid @RequestBody ReserveSeatsRequest request,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestHeader("Idempotency-Key") String idempotencyKey) {
 
         String userId = authorization.replace("Bearer ", "");
 
-        Reservation reservation =
-                reservationService.reserveSeats(
-                        showId,
-                        userId,
-                        request
-                );
+        Reservation reservation = reservationService.reserveSeats(
+                showId,
+                userId,
+                idempotencyKey,
+                request);
 
         return ResponseEntity
                 .status(HttpStatus.CREATED)

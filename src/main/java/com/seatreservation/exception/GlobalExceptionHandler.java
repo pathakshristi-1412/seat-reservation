@@ -53,4 +53,15 @@ public class GlobalExceptionHandler {
                         "error", "SHOW_NOT_FOUND",
                         "message", ex.getMessage()));
     }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<Map<String, String>> handleIdempotencyConflict(
+            IdempotencyConflictException ex) {
+
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(Map.of(
+                        "error", "IDEMPOTENCY_CONFLICT",
+                        "message", ex.getMessage()));
+    }
 }
